@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Tawarok Tracker 🍛 | @aftab._.sunny</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    body { margin:0; font-family: 'Segoe UI', sans-serif; background: #f4f4f4; }
+    #map { height: 100vh; width: 100%; cursor: pointer; }
+    #formBox {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      background: white; padding: 15px; border-radius: 15px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.3); z-index: 1000;
+      width: 90%; max-width: 350px;
+    }
+    input { margin: 4px 0; padding: 10px; width: calc(100% - 22px); border: 1px solid #ccc; border-radius: 8px; font-size: 14px; }
+    button { color: white; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 5px; width: 100%; }
+    .btn-save { background: #28a745; }
+    .btn-add-mode { background: #6f42c1; margin-top: 10px; }
+    .btn-close { background: #dc3545; font-size: 11px; margin-top: 5px; }
+    #findNearMe {
+      position: fixed; top: 20px; right: 20px; z-index: 1000;
+      background: #007bff; color: white; border: none;
+      padding: 12px 20px; border-radius: 50px; font-weight: bold;
+    }
+    .selected-label { font-size: 12px; color: #28a745; font-weight: bold; display: block; margin-bottom: 5px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+
+<button id="findNearMe" onclick="findNearestTabarak()">🔍 Find Near Me</button>
+<div id="map"></div>
+
+<div id="formBox">
+  <div id="tabarakForm">
+    <span id="mosqueLabel" class="selected-label">📍 Tap a mosque pin</span>
+    <input id="food" placeholder="Food Name 🍛">
+    <input id="time" placeholder="Time ⏰">
+    <input id="address" placeholder="Address 🏠">
+    <button class="btn-save" onclick="addOrUpdateTawarok()">Save / Update Info</button>
+    <button class="btn-close" onclick="closeTawarok()">⚠️ Mark as Finished</button>
+    <button class="btn-add-mode" onclick="toggleAddMode()">➕ Add New Mosque Location</button>
+  </div>
+
+  <div id="newMosqueForm" class="hidden">
+    <span class="selected-label" style="color:#6f42c1">STEP: Tap the map for location</span>
+    <input id="newMosqueName" placeholder="Mosque Name">
+    <input id="newLat" placeholder="Lat" readonly>
+    <input id="newLng" placeholder="Lng" readonly>
+    <button class="btn-save" onclick="submitNewMosque()">✅ Add Mosque to Map</button>
+    <button style="background:#666" onclick="toggleAddMode()">Cancel</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+const API = "https://sheetdb.io/api/v1/4ixwv6aqbcewx"; 
+
+var map = L.map('map').setView([23.233, 90.651], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+var normalIcon = L.icon({ iconUrl: "https://cdn-icons-png.flaticon.com/512/684/684908.png", iconSize:[35,35] });
+var activeIcon = L.icon({ iconUrl: "https://cdn-icons-png.flaticon.com/512/1827/1827392.png", iconSize:[40,40] });
+
+let mosques = []; 
+let markers = [];
+let tawarokData = [];
+let isAddMode = false;
+let tempMarker = null;
+let selectedMosqueName = "";
+
+async function loadAllData() {
+  try {
+    // Load Mosques tab and Main tab
+    const [mRes, tRes] = await Promise.all([
+      fetch(`${API}?sheet=Mosques`),
+      fetch(API)
+    ]);
+    mosques = await mRes.json();
+    tawarokData = await tRes.json();
+    updateMarkers();
+  } catch(e) { console.error("Data load failed. Check your Sheet tabs!"); }
+}
+
+function updateMarkers() {
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  const now = Date.now();
+
+  mosques.forEach(mosque => {
+    let found = tawarokData.find(d => d.Mosque?.trim().toLowerCase() === mosque.name.trim().toLowerCase());
+    let isActive = found && found.Timestamp && (now - parseInt(found.Timestamp) < 7200000);
+
+    let marker = L.marker([mosque.lat, mosque.lng], {icon: isActive ? activeIcon : normalIcon}).addTo(map)
+      .bindPopup(`<b>${mosque.name}</b><br>${isActive ? '🔥 '+found.Food : '❌ No Tawarok'}`)
+      .on('click', () => {
+        if(isAddMode) return;
+        selectedMosqueName = mosque.name;
+        document.getElementById("mosqueLabel").innerText = "SELECTED: " + mosque.name;
+        document.getElementById("address").value = found?.Address || "";
+      });
+    markers.push(marker);
+  });
+}
+
+// Map Click logic for adding new mosque
+map.on('click', function(e) {
+  if(!isAddMode) return;
+  if(tempMarker) map.removeLayer(tempMarker);
+  tempMarker = L.marker(e.latlng).addTo(map);
+  document.getElementById("newLat").value = e.latlng.lat.toFixed(6);
+  document.getElementById("newLng").value = e.latlng.lng.toFixed(6);
+});
+
+function toggleAddMode() {
+  isAddMode = !isAddMode;
+  document.getElementById("tabarakForm").classList.toggle("hidden");
+  document.getElementById("newMosqueForm").classList.toggle("hidden");
+}
+
+function submitNewMosque() {
+  const name = document.getElementById("newMosqueName").value.trim();
+  const lat = document.getElementById("newLat").value;
+  const lng = document.getElementById("newLng").value;
+  if(!name || !lat) return alert("Tap location on map and enter name!");
+
+  fetch(`${API}?sheet=Mosques`, {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ data: [{ name, lat, lng }] })
+  }).then(() => {
+    alert("Mosque Added!");
+    toggleAddMode();
+    loadAllData();
+  });
+}
+
+function addOrUpdateTawarok() {
+  if (!selectedMosqueName) return alert("Tap a mosque pin first!");
+  const food = document.getElementById("food").value;
+  const time = document.getElementById("time").value;
+  const address = document.getElementById("address").value;
+  const ts = Date.now().toString();
+
+  let existing = tawarokData.find(item => item.Mosque?.trim().toLowerCase() === selectedMosqueName.toLowerCase());
+  let method = existing ? "PATCH" : "POST";
+  let url = existing ? `${API}/id/${existing.id}` : API;
+  
+  fetch(url, {
+    method: method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data: existing ? { Food: food, Time: time, Address: address, Timestamp: ts } : [{ id: ts, Mosque: selectedMosqueName, Food: food, Time: time, Address: address, Timestamp: ts }] })
+  }).then(() => { 
+    alert("Saved!"); 
+    document.getElementById("food").value = "";
+    document.getElementById("time").value = "";
+    setTimeout(loadAllData, 1500); 
+  });
+}
+
+function closeTawarok() {
+  if (!selectedMosqueName) return;
+  let existing = tawarokData.find(item => item.Mosque?.trim().toLowerCase() === selectedMosqueName.toLowerCase());
+  if (!existing) return;
+
+  fetch(`${API}/id/${existing.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data: { Timestamp: "0" } })
+  }).then(() => { alert("Closed!"); loadAllData(); });
+}
+
+function findNearestTabarak() {
+    if (!navigator.geolocation) return alert("GPS not supported");
+    navigator.geolocation.getCurrentPosition(pos => {
+        const uLat = pos.coords.latitude;
+        const uLng = pos.coords.longitude;
+        if (window.uM) window.uM.setLatLng([uLat, uLng]);
+        else window.uM = L.circleMarker([uLat, uLng], {color:'blue', radius:8}).addTo(map);
+
+        let closest = null; let minD = Infinity;
+        const now = Date.now();
+        tawarokData.forEach(d => {
+            if (now - parseInt(d.Timestamp) < 7200000) {
+                let m = mosques.find(ms => ms.name.toLowerCase() === d.Mosque.toLowerCase());
+                if (m) {
+                    let d2 = Math.sqrt(Math.pow(uLat-m.lat,2)+Math.pow(uLng-m.lng,2));
+                    if (d2 < minD) { minD = d2; closest = m; }
+                }
+            }
+        });
+        if (closest) { map.setView([closest.lat, closest.lng], 16); alert("Found at: " + closest.name); }
+        else { map.setView([uLat, uLng], 15); alert("No active Tabarak nearby."); }
+    });
+}
+
+loadAllData();
+</script>
+</body>
+
+<!-- &copy; 2026 Aftab Sunny. All Rights Reserved. Unauthorized copying and distribution is strictly prohibited. -->
+
+</html>
